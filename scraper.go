@@ -6,13 +6,27 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
+	"math"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+// Define our structure for later use
+type matchPoint struct {
+	MatchDate string
+	OpponentA string
+	OpponentB string
+	OddsA     float64
+	OddsB     float64
+	Timestamp int64
+}
 
 func getWebpage(pageURL string) {
 
@@ -49,46 +63,92 @@ func getWebpage(pageURL string) {
 		// Finds our row
 		doc.Find("li .com-coupon-line-new-layout").Each(func(i int, d *goquery.Selection) {
 
-			// Make an array for our match
-			var match = make([]interface{}, 0)
-
 			// Date | NameA | NameB | OddsA | OddsB | Snapshot Time
+			var date string
+			var names []string
+			var odds []float64
+			var timeSnap int64
 
 			// Find our date
 			d.Find(".ui-countdown").Each(func(i int, dateEntry *goquery.Selection) {
-				matchDate := dateEntry.Text()
-				// Add our match to the array
-				match = append(match, matchDate)
+				date = dateEntry.Text()
+				date = strings.ReplaceAll(date, "\n", "")
 			})
 
 			// Get our names
 			d.Find(".team-name").Each(func(i int, nameEntry *goquery.Selection) {
 				matchName := nameEntry.Text()
-				// Add our name to the array
-				match = append(match, matchName)
+				matchName = strings.ReplaceAll(matchName, "\n", "")
+				// Add our name to the name array
+				names = append(names, matchName)
 			})
+
+			var nameA = names[0]
+			var nameB = names[1]
 
 			// Get our odds
 			d.Find(".ui-display-decimal-price").Each(func(i int, oddEntry *goquery.Selection) {
-				matchOdd := oddEntry.Text()
+				odd := oddEntry.Text()
+				// Remove the extra crap
+				odd = strings.ReplaceAll(odd, "\n", "")
+				oddFixed, err := strconv.ParseFloat(odd, 64)
+				// Print our error if there is one
+				if err != nil {
+					fmt.Println(err)
+				}
 				// Add our odd to the array
-				match = append(match, matchOdd)
+				odds = append(odds, math.Round(oddFixed*100)/100)
 			})
 
+			var oddA = odds[0]
+			var oddB = odds[1]
 			// Get the current timestamp for graphs later
 			now := time.Now()
-			sec := now.Unix()
-			match = append(match, sec)
+			timeSnap = now.Unix()
 
-			fmt.Println(match[0], match[1], match[2], match[3], match[4], match[5])
+			//fmt.Println(date, nameA, nameB, oddA, oddB, timeSnap)
 
 			// Write our new data to our MongoDB
-
-			// Set client options
 			clientOptions := options.Client().ApplyURI("mongodb://localhost:27017")
-
 			// Connect to MongoDB
 			client, err := mongo.Connect(context.TODO(), clientOptions)
+
+			// Log our error if we have one
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			// Check the connection to the database
+			err = client.Ping(context.TODO(), nil)
+
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			fmt.Println("Connected to MongoDB!")
+
+			// Get our specific database and get our subccollection
+			collection := client.Database("fiteNight").Collection("mma")
+
+			newData := matchPoint{date, nameA, nameB, oddA, oddB, timeSnap}
+
+			fmt.Println(newData)
+
+			insertResult, err := collection.InsertOne(context.TODO(), newData)
+
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			fmt.Println("Inserted a single document: ", insertResult.InsertedID)
+
+			err = client.Disconnect(context.TODO())
+
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			fmt.Println("Connection to MongoDB closed.")
 
 		})
 	}
